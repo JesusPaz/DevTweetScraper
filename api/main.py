@@ -1,123 +1,154 @@
-import asyncio
-from twikit import Client
 import os
-import pandas as pd
 from datetime import datetime
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+from typing import List
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Text,
+    ForeignKey,
+    DateTime,
+)
+from sqlalchemy.orm import sessionmaker, Session, declarative_base, relationship
+from dotenv import load_dotenv
 
-# Initialize client
-client = Client("en-US")
+# Load environment variables from a .env file
+load_dotenv()
+
+# Database configuration
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable not set.")
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
+Base = declarative_base()
 
 
-async def authenticate():
-    """
-    Try to authenticate first with cookies, if not available use credentials.
-    """
-    cookies_file = "twitter_cookies.json"
+# Define the User model for the database
+class UserDB(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(255), unique=True, nullable=False)
+    followers = Column(Integer, default=0)
+    additional_info = Column(Text, nullable=True)
 
-    # Try with cookies
-    if os.path.exists(cookies_file):
-        try:
-            print("Attempting to authenticate with saved cookies...")
-            client.load_cookies(cookies_file)
-            await client.user_id()  # Verify if cookies work
-            print("Successfully authenticated with cookies")
-            return True
-        except Exception as e:
-            print(f"Saved cookies are invalid: {e}")
+    # Relationship to tweets
+    tweets = relationship("TweetDB", back_populates="user")
 
-    # If cookies don't work, use credentials
+
+# Define the Tweet model for the database
+class TweetDB(Base):
+    __tablename__ = "tweets"
+    id = Column(Integer, primary_key=True, index=True)
+    tweet_id = Column(String(50), unique=True, nullable=False)
+    text = Column(Text, nullable=False)
+    likes = Column(Integer, default=0)
+    retweets = Column(Integer, default=0)
+    views = Column(Integer, default=0)
+    link = Column(Text, nullable=False)
+    profile_image = Column(Text)
+    created_at = Column(DateTime, nullable=False)
+    received_at = Column(DateTime, default=datetime.utcnow)
+    sent_by_user = Column(String(255), nullable=True)
+
+    # Foreign key to UserDB
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user = relationship("UserDB", back_populates="tweets")
+
+
+# Create the tables if they don't exist
+Base.metadata.create_all(bind=engine)
+
+
+# Pydantic models for validation
+class User(BaseModel):
+    username: str
+    followers: int = 0
+    additional_info: str = None
+
+    class Config:
+        from_attributes = True
+
+
+class Tweet(BaseModel):
+    tweet_id: str
+    text: str
+    likes: int = 0
+    retweets: int = 0
+    views: int = 0
+    link: str
+    profile_image: str = None
+    created_at: datetime
+    sent_by_user: str
+    user: User
+
+    class Config:
+        from_attributes = True
+
+
+# Initialize FastAPI
+app = FastAPI()
+
+
+# Dependency for database session
+def get_db():
+    db = SessionLocal()
     try:
-        print("Authenticating with credentials...")
-        USERNAME = os.getenv("TWITTER_USERNAME")
-        EMAIL = os.getenv("TWITTER_EMAIL")
-        PASSWORD = os.getenv("TWITTER_PASSWORD")
-
-        await client.login(auth_info_1=USERNAME, auth_info_2=EMAIL, password=PASSWORD)
-
-        # Save cookies for future use
-        print("Saving cookies for future sessions...")
-        client.save_cookies(cookies_file)
-        print("Successfully authenticated with credentials and saved cookies")
-        return True
-
-    except Exception as e:
-        print(f"Authentication failed: {e}")
-        return False
+        yield db
+    finally:
+        db.close()
 
 
-async def search_tech_tweets():
-    """Search for tech-related tweets and analyze them"""
-    tech_terms = ["programming"]
-    all_tweets = []
-
-    for term in tech_terms:
-        try:
-            print(f"Searching for: {term}")
-            tweets = await client.search_tweet(term, "Latest")
-
-            for tweet in tweets:
-                print(vars(tweet))
-                
-                user = getattr(tweet, "user", None)
-                if not user:
-                    continue
-
-                tweet_data = {
-                    "created_at": getattr(tweet, "created_at", None),
-                    "text": getattr(tweet, "text", None),
-                    "user_name": getattr(user, "name", None),
-                    "user_screen_name": getattr(user, "screen_name", None),
-                    "followers_count": getattr(user, "followers_count", 0),
-                    "retweet_count": getattr(tweet, "retweet_count", 0),
-                    "like_count": getattr(tweet, "like_count", 0),
-                    "reply_count": getattr(tweet, "reply_count", 0),
-                    "quote_count": getattr(tweet, "quote_count", 0),
-                    "search_term": term,
-                }
-
-                if tweet_data["followers_count"] > 1000:
-                    all_tweets.append(tweet_data)
-
-        except Exception as e:
-            print(f"Error searching for {term}: {e}")
-            continue
-
-    return all_tweets
-
-
-async def main():
-    if not await authenticate():
-        print("Authentication failed. Please check your credentials.")
-        return
-
-    tweets = await search_tech_tweets()
-
-    if tweets:
-        # Convert to DataFrame
-        df = pd.DataFrame(tweets)
-        df["total_engagement"] = df["like_count"] + df["retweet_count"]
-        df = df.sort_values("total_engagement", ascending=False)
-
-        # Save to CSV
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"tech_tweets_{timestamp}.csv"
-        df.to_csv(filename, index=False)
-
-        print(f"✅ Saved {len(df)} tweets to {filename}")
-
-        # Print most popular tweets
-        print("\n🔥 Most Popular Tech Tweets:")
-        for _, tweet in df.head(10).iterrows():
-            print(f"\nUser: {tweet['user_name']} (@{tweet['user_screen_name']})")
-            print(f"Followers: {tweet['followers_count']}")
-            print(f"Tweet: {tweet['text']}")
-            print(
-                f"Engagement: {tweet['total_engagement']} (Likes: {tweet['like_count']}, Retweets: {tweet['retweet_count']})"
+@app.post("/tweets", status_code=201)
+def create_tweets(tweets: List[Tweet], db: Session = Depends(get_db)):
+    """
+    Endpoint to receive and store a batch of tweets.
+    """
+    try:
+        for tweet in tweets:
+            # Verificar si el tweet ya existe en la base de datos
+            existing_tweet = (
+                db.query(TweetDB).filter(TweetDB.tweet_id == tweet.tweet_id).first()
             )
-            print("-" * 80)
-    else:
-        print("No tweets found.")
+            if existing_tweet:
+                print(f"⚠️ Tweet with ID {tweet.tweet_id} already exists. Skipping.")
+                continue  # Omitir tweets duplicados
 
+            # Verificar si el usuario existe o crearlo
+            user = (
+                db.query(UserDB).filter(UserDB.username == tweet.user.username).first()
+            )
+            if not user:
+                user = UserDB(
+                    username=tweet.user.username,
+                    followers=tweet.user.followers,
+                    additional_info=tweet.user.additional_info,
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+            # Crear y agregar el nuevo tweet
+            new_tweet = TweetDB(
+                tweet_id=tweet.tweet_id,
+                text=tweet.text,
+                likes=tweet.likes,
+                retweets=tweet.retweets,
+                views=tweet.views,
+                link=tweet.link,
+                profile_image=tweet.profile_image,
+                created_at=tweet.created_at,
+                sent_by_user=tweet.sent_by_user,
+                user_id=user.id,
+            )
+            db.add(new_tweet)
+
+        db.commit()
+        return {"message": "Tweets stored successfully."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -17,15 +17,7 @@ function getVisibleTweets() {
     try {
       console.log(`🔹 Processing tweet #${index + 1}...`);
 
-      // Identificar si el tweet es un repost y capturar el usuario que lo hizo
-      let repostedByElement = tweet.querySelector(
-        'div[aria-label*="reposted"], div[role="button"][aria-label*="reposted"]'
-      );
-      let repostedBy = repostedByElement
-        ? repostedByElement.innerText
-        : "Not a repost";
-
-      // Usuario original
+      // Usuario original del tweet
       let user =
         tweet.querySelector('[dir="ltr"] span')?.innerText || "Unknown";
 
@@ -61,17 +53,21 @@ function getVisibleTweets() {
         ? tweetLinkElement.getAttribute("href").split("/status/")[1]
         : "No ID";
 
-      // Crear objeto de datos
+      if (tweetId === "No ID") {
+        console.warn("⚠️ Tweet without a valid ID was skipped.");
+        return;
+      }
+
+      // Crear objeto con los datos capturados
       let tweetData = {
-        id: tweetId, // Nuevo campo para el ID único
-        repostedBy: repostedBy,
+        id: tweetId,
         user: user,
         text: text,
         likes: parseInt(likes.replace(",", "")) || 0,
         retweets: parseInt(retweets.replace(",", "")) || 0,
         views: parseInt(views.replace(",", "")) || 0,
-        profileImage: profileImage,
         link: tweetLink,
+        profileImage: profileImage,
       };
 
       console.log("✅ Tweet captured:", tweetData);
@@ -85,11 +81,24 @@ function getVisibleTweets() {
   return tweets;
 }
 
-// Function to save tweets
+// Function to save tweets, ensuring no duplicates
 function saveTweets() {
-  const tweets = getVisibleTweets();
-  chrome.storage.local.set({ tweets }, () => {
-    console.log("✅ Tweets auto-saved locally:", tweets);
+  const newTweets = getVisibleTweets();
+
+  // Retrieve existing tweets from localStorage
+  chrome.storage.local.get("tweets", (data) => {
+    const savedTweets = data.tweets || {};
+    console.log("📥 Loaded existing tweets from storage:", savedTweets);
+
+    // Merge new tweets into existing ones
+    newTweets.forEach((tweet) => {
+      savedTweets[tweet.id] = tweet; // Use tweet ID as the key to prevent duplicates
+    });
+
+    // Save updated tweets back to localStorage
+    chrome.storage.local.set({ tweets: savedTweets }, () => {
+      console.log("✅ Tweets auto-saved locally:", savedTweets);
+    });
   });
 }
 
