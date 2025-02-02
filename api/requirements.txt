@@ -1,5 +1,6 @@
-fastapi[standard]
+fastapi[all]
 uvicorn
 psycopg2-binary
 sqlalchemy
 python-dotenv
+alembic
