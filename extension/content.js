@@ -4,126 +4,149 @@ let autoSaveEnabled = false; // Default state
 chrome.storage.sync.get("autoSaveEnabled", (data) => {
   autoSaveEnabled = data.autoSaveEnabled || false;
   console.log(`🚀 Auto-Save initialized: ${autoSaveEnabled}`);
+
+  if (autoSaveEnabled) {
+    startAutoSave();
+  }
 });
 
+// URL de la API
+const API_URL = "http://127.0.0.1:8000/tweets";
+
+// Cola de tweets por enviar
+const tweetQueue = [];
+
+// Set para guardar los IDs de los tweets ya enviados
+const sentTweetIds = new Set();
+
+// Función para obtener tweets visibles
 function getVisibleTweets() {
-  console.log("🔍 Searching for tweets on the page...");
-  let tweets = [];
-  let tweetElements = document.querySelectorAll("article");
+  const tweets = [];
+  const tweetElements = document.querySelectorAll("article");
 
-  console.log(`📌 Found ${tweetElements.length} tweets on the page.`);
-
-  tweetElements.forEach((tweet, index) => {
+  tweetElements.forEach((tweet) => {
     try {
-      console.log(`🔹 Processing tweet #${index + 1}...`);
-
-      // Usuario original del tweet
-      let user =
+      const user =
         tweet.querySelector('[dir="ltr"] span')?.innerText || "Unknown";
-
-      // Texto del tweet
-      let text =
+      const text =
         tweet.querySelector('[data-testid="tweetText"]')?.innerText ||
         "No text";
-
-      // Cantidad de likes
-      let likes = tweet.querySelector('[data-testid="like"]')?.innerText || "0";
-
-      // Cantidad de retweets
-      let retweets =
+      const likes =
+        tweet.querySelector('[data-testid="like"]')?.innerText || "0";
+      const retweets =
         tweet.querySelector('[data-testid="retweet"]')?.innerText || "0";
-
-      // Cantidad de vistas (si está disponible)
-      let views =
+      const views =
         tweet.querySelector('[data-testid="viewCount"]')?.innerText || "0";
-
-      // Imagen del perfil del usuario
-      let profileImage = tweet.querySelector("img")?.src || "No image";
-
-      // Link al tweet
-      let tweetLinkElement = tweet.querySelector(
+      const profileImage = tweet.querySelector("img")?.src || "No image";
+      const tweetLinkElement = tweet.querySelector(
         'a[role="link"][href*="/status/"]'
       );
-      let tweetLink = tweetLinkElement
+      const tweetLink = tweetLinkElement
         ? `https://x.com${tweetLinkElement.getAttribute("href")}`
         : "No link";
-
-      // ID del tweet
-      let tweetId = tweetLinkElement
+      const tweetId = tweetLinkElement
         ? tweetLinkElement.getAttribute("href").split("/status/")[1]
         : "No ID";
 
-      if (tweetId === "No ID") {
-        console.warn("⚠️ Tweet without a valid ID was skipped.");
+      if (tweetId === "No ID" || sentTweetIds.has(tweetId)) {
         return;
       }
 
-      // Crear objeto con los datos capturados
-      let tweetData = {
-        id: tweetId,
-        user: user,
+      const createdAt = new Date().toISOString();
+
+      const tweetData = {
+        tweet_id: tweetId,
+        user: { username: user, followers: 0 },
         text: text,
         likes: parseInt(likes.replace(",", "")) || 0,
         retweets: parseInt(retweets.replace(",", "")) || 0,
         views: parseInt(views.replace(",", "")) || 0,
         link: tweetLink,
-        profileImage: profileImage,
+        profile_image: profileImage,
+        created_at: createdAt,
+        sent_by_user: "my_extension",
       };
 
-      console.log("✅ Tweet captured:", tweetData);
       tweets.push(tweetData);
     } catch (error) {
       console.error("❌ Error capturing tweet:", error);
     }
   });
 
-  console.log(`📊 Total tweets captured: ${tweets.length}`);
   return tweets;
 }
 
-// Function to save tweets, ensuring no duplicates
-function saveTweets() {
-  const newTweets = getVisibleTweets();
+// Función para enviar tweets acumulados
+function sendTweetsFromQueue() {
+  if (tweetQueue.length === 0) return; // Si no hay tweets, no hacer nada
 
-  // Retrieve existing tweets from localStorage
-  chrome.storage.local.get("tweets", (data) => {
-    const savedTweets = data.tweets || {};
-    console.log("📥 Loaded existing tweets from storage:", savedTweets);
+  const tweetsToSend = [...tweetQueue];
+  tweetQueue.length = 0; // Limpiar la cola antes de enviar
 
-    // Merge new tweets into existing ones
-    newTweets.forEach((tweet) => {
-      savedTweets[tweet.id] = tweet; // Use tweet ID as the key to prevent duplicates
+  fetch(API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(tweetsToSend),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+      return response.json();
+    })
+    .then((data) => {
+      console.log("✅ Tweets successfully sent to the API:", data);
+
+      // Agregar los IDs de los tweets enviados al set
+      tweetsToSend.forEach((tweet) => sentTweetIds.add(tweet.tweet_id));
+    })
+    .catch((error) => {
+      console.error("❌ Error sending tweets to the API:", error);
+
+      // Si ocurre un error, devolver los tweets a la cola
+      tweetQueue.push(...tweetsToSend);
     });
+}
 
-    // Save updated tweets back to localStorage
-    chrome.storage.local.set({ tweets: savedTweets }, () => {
-      console.log("✅ Tweets auto-saved locally:", savedTweets);
-    });
+// Función para manejar el scroll y acumular tweets
+function handleScroll() {
+  const now = Date.now();
+  const tweets = getVisibleTweets();
+
+  tweets.forEach((tweet) => {
+    if (!sentTweetIds.has(tweet.tweet_id)) {
+      tweetQueue.push(tweet);
+    }
   });
 }
 
-// Monitor scroll events to save tweets if auto-save is enabled
-if (autoSaveEnabled) {
-  window.addEventListener("scroll", () => {
-    saveTweets();
-  });
+// Iniciar el proceso de envío automático cada X segundos
+function startAutoSave() {
+  window.addEventListener("scroll", handleScroll);
+
+  setInterval(() => {
+    sendTweetsFromQueue();
+  }, 5000); // Enviar cada 5 segundos
 }
 
-// Listen for messages from popup
+// Detener el auto-guardado
+function stopAutoSave() {
+  window.removeEventListener("scroll", handleScroll);
+}
+
+// Escuchar mensajes desde el popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log("📩 Message received in content script:", request);
-
   if (request.action === "toggleAutoSave") {
     autoSaveEnabled = request.enabled;
-    console.log(`🚀 Auto-Save toggled: ${autoSaveEnabled}`);
 
-    // Add or remove scroll listener based on toggle
     if (autoSaveEnabled) {
-      window.addEventListener("scroll", saveTweets);
+      startAutoSave();
     } else {
-      window.removeEventListener("scroll", saveTweets);
+      stopAutoSave();
     }
   }
 
-  return true;
+  sendResponse({ status: "success" });
 });

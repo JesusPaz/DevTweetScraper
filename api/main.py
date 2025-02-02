@@ -1,70 +1,64 @@
 import os
 from datetime import datetime
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
-from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    Text,
-    ForeignKey,
-    DateTime,
-)
-from sqlalchemy.orm import sessionmaker, Session, declarative_base, relationship
+from sqlalchemy.orm import Session
 from dotenv import load_dotenv
+from .models import (
+    Base,
+    UserDB,
+    TweetDB,
+    engine,
+    SessionLocal,
+)  # Importar modelos desde models.py
 
-# Load environment variables from a .env file
+# Cargar variables de entorno
 load_dotenv()
 
-# Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable not set.")
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
-Base = declarative_base()
+# Configurar cache (puede ser en memoria o Redis)
+tweet_ids_cache = set()  # Cache en memoria
 
 
-# Define the User model for the database
-class UserDB(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(255), unique=True, nullable=False)
-    followers = Column(Integer, default=0)
-    additional_info = Column(Text, nullable=True)
-
-    # Relationship to tweets
-    tweets = relationship("TweetDB", back_populates="user")
-
-
-# Define the Tweet model for the database
-class TweetDB(Base):
-    __tablename__ = "tweets"
-    id = Column(Integer, primary_key=True, index=True)
-    tweet_id = Column(String(50), unique=True, nullable=False)
-    text = Column(Text, nullable=False)
-    likes = Column(Integer, default=0)
-    retweets = Column(Integer, default=0)
-    views = Column(Integer, default=0)
-    link = Column(Text, nullable=False)
-    profile_image = Column(Text)
-    created_at = Column(DateTime, nullable=False)
-    received_at = Column(DateTime, default=datetime.utcnow)
-    sent_by_user = Column(String(255), nullable=True)
-
-    # Foreign key to UserDB
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    user = relationship("UserDB", back_populates="tweets")
+# Lifespan para manejar eventos de inicio y cierre de la app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global tweet_ids_cache
+    # Cargar los IDs de tweets al inicio
+    with SessionLocal() as db:
+        tweet_ids_cache = {row[0] for row in db.query(TweetDB.tweet_id).all()}
+        print(f"🚀 Cache inicializado con {len(tweet_ids_cache)} tweets.")
+    yield
+    # Limpiar cache al cerrar la app
+    tweet_ids_cache.clear()
+    print("🧹 Cache limpiado.")
 
 
-# Create the tables if they don't exist
-Base.metadata.create_all(bind=engine)
+# Crear la app con lifespan
+app = FastAPI(lifespan=lifespan)
+
+# Configurar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-# Pydantic models for validation
+# Dependencia para obtener la sesión de la base de datos
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# Modelos Pydantic
 class User(BaseModel):
     username: str
     followers: int = 0
@@ -90,32 +84,15 @@ class Tweet(BaseModel):
         from_attributes = True
 
 
-# Initialize FastAPI
-app = FastAPI()
-
-
-# Dependency for database session
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
+# Endpoint para recibir tweets
 @app.post("/tweets", status_code=201)
 def create_tweets(tweets: List[Tweet], db: Session = Depends(get_db)):
-    """
-    Endpoint to receive and store a batch of tweets.
-    """
     try:
+        new_tweets = []
         for tweet in tweets:
-            # Verificar si el tweet ya existe en la base de datos
-            existing_tweet = (
-                db.query(TweetDB).filter(TweetDB.tweet_id == tweet.tweet_id).first()
-            )
-            if existing_tweet:
-                print(f"⚠️ Tweet with ID {tweet.tweet_id} already exists. Skipping.")
+            # Verificar si el tweet ya está en el cache
+            if tweet.tweet_id in tweet_ids_cache:
+                # print(f"⚠️ Tweet con ID {tweet.tweet_id} ya existe. Omitiendo.")
                 continue  # Omitir tweets duplicados
 
             # Verificar si el usuario existe o crearlo
@@ -124,9 +101,7 @@ def create_tweets(tweets: List[Tweet], db: Session = Depends(get_db)):
             )
             if not user:
                 user = UserDB(
-                    username=tweet.user.username,
-                    followers=tweet.user.followers,
-                    additional_info=tweet.user.additional_info,
+                    username=tweet.user.username, followers=tweet.user.followers
                 )
                 db.add(user)
                 db.commit()
@@ -145,10 +120,12 @@ def create_tweets(tweets: List[Tweet], db: Session = Depends(get_db)):
                 sent_by_user=tweet.sent_by_user,
                 user_id=user.id,
             )
-            db.add(new_tweet)
+            new_tweets.append(new_tweet)
+            tweet_ids_cache.add(tweet.tweet_id)  # Actualizar el cache en memoria
 
+        db.add_all(new_tweets)
         db.commit()
-        return {"message": "Tweets stored successfully."}
+        return {"message": f"{len(new_tweets)} Tweets almacenados con éxito."}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
