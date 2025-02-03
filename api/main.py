@@ -13,28 +13,24 @@ from .models import (
     TweetDB,
     engine,
     SessionLocal,
-)  # Importar modelos desde models.py
+)
 
 # Cargar variables de entorno
 load_dotenv()
 
-# Configurar cache (puede ser en memoria o Redis)
-tweet_ids_cache = set()  # Cache en memoria
-
+# Configurar cache en memoria
+tweet_ids_cache = set()
 
 # Lifespan para manejar eventos de inicio y cierre de la app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global tweet_ids_cache
-    # Cargar los IDs de tweets al inicio
     with SessionLocal() as db:
         tweet_ids_cache = {row[0] for row in db.query(TweetDB.tweet_id).all()}
         print(f"🚀 Cache inicializado con {len(tweet_ids_cache)} tweets.")
     yield
-    # Limpiar cache al cerrar la app
     tweet_ids_cache.clear()
     print("🧹 Cache limpiado.")
-
 
 # Crear la app con lifespan
 app = FastAPI(lifespan=lifespan)
@@ -48,7 +44,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Dependencia para obtener la sesión de la base de datos
 def get_db():
     db = SessionLocal()
@@ -56,7 +51,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 
 # Modelos Pydantic
 class User(BaseModel):
@@ -67,13 +61,14 @@ class User(BaseModel):
     class Config:
         from_attributes = True
 
-
 class Tweet(BaseModel):
     tweet_id: str
     text: str
     likes: int = 0
     retweets: int = 0
     views: int = 0
+    replies: int = 0
+    bookmarks: int = 0
     link: str
     profile_image: str = None
     created_at: datetime
@@ -83,7 +78,6 @@ class Tweet(BaseModel):
     class Config:
         from_attributes = True
 
-
 # Endpoint para recibir tweets
 @app.post("/tweets", status_code=201)
 def create_tweets(tweets: List[Tweet], db: Session = Depends(get_db)):
@@ -92,7 +86,6 @@ def create_tweets(tweets: List[Tweet], db: Session = Depends(get_db)):
         for tweet in tweets:
             # Verificar si el tweet ya está en el cache
             if tweet.tweet_id in tweet_ids_cache:
-                # print(f"⚠️ Tweet con ID {tweet.tweet_id} ya existe. Omitiendo.")
                 continue  # Omitir tweets duplicados
 
             # Verificar si el usuario existe o crearlo
@@ -114,6 +107,8 @@ def create_tweets(tweets: List[Tweet], db: Session = Depends(get_db)):
                 likes=tweet.likes,
                 retweets=tweet.retweets,
                 views=tweet.views,
+                replies=tweet.replies,  # Nuevo campo
+                bookmarks=tweet.bookmarks,  # Nuevo campo
                 link=tweet.link,
                 profile_image=tweet.profile_image,
                 created_at=tweet.created_at,
@@ -121,7 +116,7 @@ def create_tweets(tweets: List[Tweet], db: Session = Depends(get_db)):
                 user_id=user.id,
             )
             new_tweets.append(new_tweet)
-            tweet_ids_cache.add(tweet.tweet_id)  # Actualizar el cache en memoria
+            tweet_ids_cache.add(tweet.tweet_id)  # Actualizar cache
 
         db.add_all(new_tweets)
         db.commit()
