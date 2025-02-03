@@ -11,6 +11,11 @@ const API_URL = "http://127.0.0.1:8000/tweets";
 const tweetQueue = [];
 const sentTweetIds = new Set();
 
+// Function to clean tweet ID
+function cleanTweetId(tweetId) {
+  return tweetId.split("/")[0];
+}
+
 function getVisibleTweets() {
   const tweets = [];
   const tweetElements = document.querySelectorAll("article");
@@ -29,15 +34,18 @@ function getVisibleTweets() {
       const tweetLink = tweetLinkElement
         ? `https://x.com${tweetLinkElement.getAttribute("href")}`
         : "No link";
-      const tweetId = tweetLinkElement
+
+      let tweetId = tweetLinkElement
         ? tweetLinkElement.getAttribute("href").split("/status/")[1]
         : "No ID";
+
+      // Clean tweet ID
+      tweetId = cleanTweetId(tweetId);
 
       if (tweetId === "No ID" || sentTweetIds.has(tweetId)) {
         return;
       }
 
-      // Buscar el div con todas las métricas
       const metricsElement = tweet.querySelector('[aria-label*="views"]');
       let replies = 0,
         reposts = 0,
@@ -70,7 +78,7 @@ function getVisibleTweets() {
         user: { username: user, followers: 0 },
         text: text,
         likes: likes,
-        retweets: reposts, // Reposts son retweets
+        retweets: reposts, // Reposts are retweets
         views: views,
         replies: replies,
         bookmarks: bookmarks,
