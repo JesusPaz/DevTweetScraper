@@ -39,7 +39,6 @@ class UserDB(Base):
     tweets = relationship("TweetDB", back_populates="user")
 
 
-# Modelo de Tweets
 class TweetDB(Base):
     __tablename__ = "tweets"
 
@@ -48,16 +47,18 @@ class TweetDB(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     text = Column(Text, nullable=False)
     likes = Column(Integer, default=0)
-    retweets = Column(Integer, default=0)
+    retweets = Column(Integer, default=0)  # Ahora son reposts
     views = Column(Integer, default=0)
+    replies = Column(Integer, default=0)  # Nuevo campo para respuestas
+    bookmarks = Column(Integer, default=0)  # Nuevo campo para guardados
     link = Column(Text, nullable=False)
     profile_image = Column(Text)
     created_at = Column(
         DateTime, nullable=False, default=datetime.utcnow
-    )  # Fecha de creación del tweet
+    )  # Fecha de creación
     received_at = Column(
         DateTime, nullable=False, default=datetime.utcnow
-    )  # Fecha cuando se guardó en la DB
-    sent_by_user = Column(String(255), nullable=False)  # Quién mandó el tweet
+    )  # Fecha de recepción
+    sent_by_user = Column(String(255), nullable=False)  # Quién envió el tweet
 
     user = relationship("UserDB", back_populates="tweets")
