@@ -3,6 +3,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List
 from sqlalchemy.orm import Session
@@ -34,6 +35,10 @@ async def lifespan(app: FastAPI):
 
 # Crear la app con lifespan
 app = FastAPI(lifespan=lifespan)
+
+@app.get("/", tags=["Health Check"])
+async def health_check():
+    return JSONResponse(content={"status": "ok", "message": "Service is running"})
 
 # Configurar CORS
 app.add_middleware(
