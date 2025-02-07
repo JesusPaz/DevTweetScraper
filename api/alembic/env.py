@@ -21,7 +21,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Importar modelos para que Alembic detecte cambios automáticamente
-from models import Base  # Asegúrate de importar correctamente
+from app.models import Base  # Asegúrate de importar correctamente
 
 # Definir la metadata de los modelos para generar las migraciones
 target_metadata = Base.metadata
